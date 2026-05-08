@@ -1,0 +1,48 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 22,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "stm32-debug",
+      "displayName": "STM32 Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-debug",
+      "toolchainFile": "${sourceDir}/cmake/toolchain-arm-none-eabi.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_MAKE_PROGRAM": "C:/ST/STM32CubeCLT_1.18.0/Ninja/bin/ninja.exe"
+      }
+    },
+    {
+      "name": "stm32-release",
+      "displayName": "STM32 Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-release",
+      "toolchainFile": "${sourceDir}/cmake/toolchain-arm-none-eabi.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_MAKE_PROGRAM": "C:/ST/STM32CubeCLT_1.18.0/Ninja/bin/ninja.exe"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "stm32-debug",
+      "configurePreset": "stm32-debug",
+      "targets": [
+        "diode_measure.elf"
+      ]
+    },
+    {
+      "name": "stm32-release",
+      "configurePreset": "stm32-release",
+      "targets": [
+        "diode_measure.elf"
+      ]
+    }
+  ]
+}
