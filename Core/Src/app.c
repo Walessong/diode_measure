@@ -40,12 +40,18 @@ static void App_SortFloatArray(float *values, uint8_t count)
     }
 }
 
+static uint8_t App_IsLearnVfValid(float vf)
+{
+    return ((vf >= VF_VALID_MIN) && (vf <= VF_VALID_MAX)) ? 1U : 0U;
+}
+
 static uint8_t App_BuildRobustLearnScan(SingleMeasureResult_t *scan_out)
 {
     SingleMeasureResult_t scan;
     float low_values[LEARN_SCAN_AVG_TIMES];
     float high_values[LEARN_SCAN_AVG_TIMES];
-    uint8_t valid_count = 0U;
+    uint8_t low_count = 0U;
+    uint8_t high_count = 0U;
     uint8_t i;
     uint8_t start;
     uint8_t end;
@@ -64,38 +70,55 @@ static uint8_t App_BuildRobustLearnScan(SingleMeasureResult_t *scan_out)
     {
         Measure_ScanSingleDetailed(&scan);
         if ((scan.valid != 0U) &&
-            (scan.display_state == DISPLAY_STATE_FORWARD_ON) &&
-            (scan.vf_high_corrected > 0.0f))
+            (App_IsLearnVfValid(scan.vf_low_corrected) != 0U))
         {
-            low_values[valid_count] = scan.vf_low_corrected;
-            high_values[valid_count] = scan.vf_high_corrected;
-            valid_count++;
+            low_values[low_count] = scan.vf_low_corrected;
+            low_count++;
+
+            if (App_IsLearnVfValid(scan.vf_high_corrected) != 0U)
+            {
+                high_values[high_count] = scan.vf_high_corrected;
+                high_count++;
+            }
         }
         HAL_Delay(5U);
     }
 
-    if (valid_count < (uint8_t)(LEARN_SCAN_TRIM_COUNT * 2U + 1U))
+    if ((low_count < LEARN_LOW_MIN_SAMPLES) ||
+        (low_count < (uint8_t)(LEARN_SCAN_TRIM_COUNT * 2U + 1U)))
     {
         return 0U;
     }
 
-    App_SortFloatArray(low_values, valid_count);
-    App_SortFloatArray(high_values, valid_count);
+    App_SortFloatArray(low_values, low_count);
     start = LEARN_SCAN_TRIM_COUNT;
-    end = (uint8_t)(valid_count - LEARN_SCAN_TRIM_COUNT);
+    end = (uint8_t)(low_count - LEARN_SCAN_TRIM_COUNT);
     for (i = start; i < end; i++)
     {
         low_sum += low_values[i];
-        high_sum += high_values[i];
     }
-
     low_avg = low_sum / (float)(end - start);
-    high_avg = high_sum / (float)(end - start);
+
+    if ((high_count >= LEARN_HIGH_MIN_SAMPLES) &&
+        (high_count >= (uint8_t)(LEARN_SCAN_TRIM_COUNT * 2U + 1U)))
+    {
+        App_SortFloatArray(high_values, high_count);
+        start = LEARN_SCAN_TRIM_COUNT;
+        end = (uint8_t)(high_count - LEARN_SCAN_TRIM_COUNT);
+        for (i = start; i < end; i++)
+        {
+            high_sum += high_values[i];
+        }
+        high_avg = high_sum / (float)(end - start);
+    }
+    else
+    {
+        high_avg = low_avg;
+    }
 
     Measure_ScanSingleDetailed(scan_out);
     scan_out->valid = 1U;
     scan_out->quality = MEASURE_QUALITY_VALID;
-    scan_out->display_state = DISPLAY_STATE_FORWARD_ON;
     scan_out->vf = low_avg;
     scan_out->vf_low_corrected = low_avg;
     scan_out->vf_high_corrected = high_avg;
@@ -104,9 +127,11 @@ static uint8_t App_BuildRobustLearnScan(SingleMeasureResult_t *scan_out)
 
 static void App_ShowMenu(void)
 {
-    const DiodeModel_t *model = Learn_GetSingleModel();
-
-    UI_ShowMenu(g_app.menu_index, model->valid);
+    UI_ShowMenu(g_app.menu_index,
+                Learn_IsModelValid(MODEL_SLOT_SINGLE),
+                Learn_IsModelValid(MODEL_SLOT_A),
+                Learn_IsModelValid(MODEL_SLOT_B),
+                Learn_IsModelValid(MODEL_SLOT_C));
 }
 
 static void App_ShowTimedPage(uint32_t hold_ms)
@@ -147,12 +172,12 @@ static void App_RunSingleVf(void)
     App_ShowTimedPage(RESULT_HOLD_MS);
 }
 
-static void App_RunLearn(void)
+static void App_RunLearnSlot(ModelSlot_t slot, const char *title)
 {
     LearnResult_t result;
 
     memset(&result, 0, sizeof(result));
-    UI_ShowHint("LEARNING", "WAIT...");
+    UI_ShowHint("LEARNING", title);
     if (App_BuildRobustLearnScan(&g_app.last_scan) == 0U)
     {
         result.status = LEARN_STATUS_UNSTABLE;
@@ -163,29 +188,65 @@ static void App_RunLearn(void)
     }
     if (result.status == LEARN_STATUS_OK)
     {
-        if (Learn_SaveSingleModel(&result.model) == 0U)
+        if (Learn_SaveModel(slot, &result.model) == 0U)
         {
             result.status = LEARN_STATUS_FAIL;
         }
     }
-    UI_ShowLearnResult(&result);
+    UI_ShowLearnResult(slot, &result);
     App_ShowTimedPage(DETAILED_RESULT_HOLD_MS);
+}
+
+static void App_RunLearnSingle(void)
+{
+    App_RunLearnSlot(MODEL_SLOT_SINGLE, "REF");
+}
+
+static void App_RunLearnA(void)
+{
+    App_RunLearnSlot(MODEL_SLOT_A, "MODEL A");
+}
+
+static void App_RunLearnB(void)
+{
+    App_RunLearnSlot(MODEL_SLOT_B, "MODEL B");
+}
+
+static void App_RunLearnC(void)
+{
+    App_RunLearnSlot(MODEL_SLOT_C, "MODEL C");
 }
 
 static void App_RunCount(void)
 {
     CountResult_t result;
 
-    UI_ShowHint("COUNTING", "WAIT...");
+    UI_ShowHint("COUNTING", "REF");
     result.status = Identify_CountSameType(Learn_GetSingleModel(), &result);
     UI_ShowCountResult(&result);
     App_ShowTimedPage(DETAILED_RESULT_HOLD_MS);
 }
 
+static void App_RunCountAbc(void)
+{
+    CountAbcResult_t result;
+
+    UI_ShowHint("COUNTING", "A/B/C");
+    result.status = Identify_CountABC(Learn_GetModel(MODEL_SLOT_A),
+                                      Learn_GetModel(MODEL_SLOT_B),
+                                      Learn_GetModel(MODEL_SLOT_C),
+                                      &result);
+    UI_ShowCountAbcResult(&result);
+    App_ShowTimedPage(DETAILED_RESULT_HOLD_MS);
+}
+
 static void App_RunDiag(void)
 {
+    FaultMeasureResult_t fault_sample;
+
     Measure_ScanSingleDetailed(&g_app.last_scan);
-    UI_ShowDiagInfo(&g_app.last_scan, Learn_GetSingleModel());
+    (void)Measure_GetFaultSample(&fault_sample);
+    UI_ShowDiagInfo(&g_app.last_scan, &fault_sample, Learn_GetSingleModel());
     App_ShowTimedPage(DETAILED_RESULT_HOLD_MS);
 }
 
@@ -199,15 +260,19 @@ static void App_ExecuteCurrentMode(void)
     case APP_MODE_BASIC_VF:
         App_RunSingleVf();
         break;
-    case APP_MODE_LEARN_SINGLE:
-        App_RunLearn();
-        break;
     case APP_MODE_COUNT_SINGLE:
         App_RunCount();
+        break;
+    case APP_MODE_COUNT_ABC:
+        App_RunCountAbc();
         break;
     case APP_MODE_DIAG_INFO:
         App_RunDiag();
         break;
+    case APP_MODE_LEARN_SINGLE:
+    case APP_MODE_LEARN_A:
+    case APP_MODE_LEARN_B:
+    case APP_MODE_LEARN_C:
     case APP_MODE_MENU:
     default:
         App_ShowMenu();
@@ -215,9 +280,30 @@ static void App_ExecuteCurrentMode(void)
     }
 }
 
+static void App_RunLearnForCurrentMode(void)
+{
+    switch (g_app.mode)
+    {
+    case APP_MODE_LEARN_SINGLE:
+        App_RunLearnSingle();
+        break;
+    case APP_MODE_LEARN_A:
+        App_RunLearnA();
+        break;
+    case APP_MODE_LEARN_B:
+        App_RunLearnB();
+        break;
+    case APP_MODE_LEARN_C:
+        App_RunLearnC();
+        break;
+    default:
+        break;
+    }
+}
+
 static void App_StepMode(void)
 {
-    g_app.menu_index = (uint8_t)((g_app.menu_index + 1U) % 5U);
+    g_app.menu_index = (uint8_t)((g_app.menu_index + 1U) % 9U);
     g_app.mode = (AppMode_t)(g_app.menu_index + 1U);
     App_ShowMenu();
 }
@@ -263,10 +349,7 @@ void App_Task(void)
         App_StepMode();
         break;
     case KEY_EVENT_LEARN:
-        if (g_app.mode == APP_MODE_LEARN_SINGLE)
-        {
-            App_RunLearn();
-        }
+        App_RunLearnForCurrentMode();
         break;
     case KEY_EVENT_MEAS:
         App_ExecuteCurrentMode();

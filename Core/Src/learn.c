@@ -6,40 +6,68 @@
 #include "app_config.h"
 #include "flash_storage.h"
 
-static DiodeModel_t g_single_model;
+static DiodeModel_t g_models[MODEL_SLOT_COUNT];
+
+static uint8_t Learn_IsSlotValid(ModelSlot_t slot)
+{
+    return (slot < MODEL_SLOT_COUNT) ? 1U : 0U;
+}
 
 void Learn_Init(void)
 {
-    if (FlashStorage_LoadModel(&g_single_model) == 0U)
+    if (FlashStorage_LoadModels(g_models, MODEL_SLOT_COUNT) == 0U)
     {
-        memset(&g_single_model, 0, sizeof(g_single_model));
+        memset(g_models, 0, sizeof(g_models));
     }
 }
 
-void Learn_ClearSingleModel(void)
+void Learn_ClearAllModels(void)
 {
-    memset(&g_single_model, 0, sizeof(g_single_model));
+    memset(g_models, 0, sizeof(g_models));
 }
 
-uint8_t Learn_SaveSingleModel(const DiodeModel_t *model)
+void Learn_ClearModel(ModelSlot_t slot)
 {
-    if (model == NULL)
+    if (Learn_IsSlotValid(slot) == 0U)
+    {
+        return;
+    }
+
+    memset(&g_models[slot], 0, sizeof(g_models[slot]));
+    (void)FlashStorage_SaveModels(g_models, MODEL_SLOT_COUNT);
+}
+
+uint8_t Learn_SaveModel(ModelSlot_t slot, const DiodeModel_t *model)
+{
+    if ((Learn_IsSlotValid(slot) == 0U) || (model == NULL))
     {
         return 0U;
     }
 
-    g_single_model = *model;
-    return FlashStorage_SaveModel(model);
+    g_models[slot] = *model;
+    return FlashStorage_SaveModels(g_models, MODEL_SLOT_COUNT);
 }
 
-uint8_t Learn_LoadSingleModel(void)
+uint8_t Learn_LoadAllModels(void)
 {
-    return FlashStorage_LoadModel(&g_single_model);
+    return FlashStorage_LoadModels(g_models, MODEL_SLOT_COUNT);
 }
 
-const DiodeModel_t *Learn_GetSingleModel(void)
+const DiodeModel_t *Learn_GetModel(ModelSlot_t slot)
 {
-    return &g_single_model;
+    if (Learn_IsSlotValid(slot) == 0U)
+    {
+        return NULL;
+    }
+
+    return &g_models[slot];
+}
+
+uint8_t Learn_IsModelValid(ModelSlot_t slot)
+{
+    const DiodeModel_t *model = Learn_GetModel(slot);
+
+    return ((model != NULL) && (model->valid != 0U)) ? 1U : 0U;
 }
 
 LearnStatus_t Learn_BuildModel(const SingleMeasureResult_t *scan, DiodeModel_t *model)
@@ -57,11 +85,7 @@ LearnStatus_t Learn_BuildModel(const SingleMeasureResult_t *scan, DiodeModel_t *
     {
         return LEARN_STATUS_OPEN;
     }
-    if (scan->display_state == DISPLAY_STATE_REVERSE_OFF)
-    {
-        return LEARN_STATUS_REVERSE;
-    }
-    if ((scan->valid == 0U) || (scan->display_state != DISPLAY_STATE_FORWARD_ON))
+    if (scan->valid == 0U)
     {
         return LEARN_STATUS_UNSTABLE;
     }

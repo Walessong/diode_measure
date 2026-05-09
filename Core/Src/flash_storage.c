@@ -4,16 +4,16 @@
 
 #define FLASH_PAGE_SIZE_BYTES 1024U
 #define FLASH_PAGE_MODEL_ADDR 0x0800FC00UL
-#define FLASH_MAGIC_MODEL     0x4D4F4431UL
-#define FLASH_VERSION         0x00010003UL
+#define FLASH_MAGIC_MODEL     0x4D4F4432UL
+#define FLASH_VERSION         0x00010006UL
 
 typedef struct
 {
     uint32_t magic;
     uint32_t version;
-    DiodeModel_t data;
+    DiodeModel_t models[MODEL_SLOT_COUNT];
     uint32_t checksum;
-} ModelRecord_t;
+} ModelStoreRecord_t;
 
 static uint32_t FlashStorage_Checksum(const uint8_t *data, uint32_t size)
 {
@@ -72,11 +72,12 @@ static uint8_t FlashStorage_WritePage(uint32_t page_address, const void *data, u
     return 1U;
 }
 
-uint8_t FlashStorage_SaveModel(const DiodeModel_t *model)
+uint8_t FlashStorage_SaveModels(const DiodeModel_t *models, uint32_t count)
 {
-    ModelRecord_t record;
+    ModelStoreRecord_t record;
+    uint32_t copy_count;
 
-    if (model == NULL)
+    if ((models == NULL) || (count == 0U))
     {
         return 0U;
     }
@@ -84,17 +85,19 @@ uint8_t FlashStorage_SaveModel(const DiodeModel_t *model)
     memset(&record, 0xFF, sizeof(record));
     record.magic = FLASH_MAGIC_MODEL;
     record.version = FLASH_VERSION;
-    record.data = *model;
+    copy_count = (count > MODEL_SLOT_COUNT) ? MODEL_SLOT_COUNT : count;
+    memcpy(record.models, models, copy_count * sizeof(DiodeModel_t));
     record.checksum = FlashStorage_Checksum((const uint8_t *)&record, sizeof(record) - sizeof(record.checksum));
     return FlashStorage_WritePage(FLASH_PAGE_MODEL_ADDR, &record, sizeof(record));
 }
 
-uint8_t FlashStorage_LoadModel(DiodeModel_t *model)
+uint8_t FlashStorage_LoadModels(DiodeModel_t *models, uint32_t count)
 {
-    const ModelRecord_t *record = (const ModelRecord_t *)FLASH_PAGE_MODEL_ADDR;
+    const ModelStoreRecord_t *record = (const ModelStoreRecord_t *)FLASH_PAGE_MODEL_ADDR;
     uint32_t checksum;
+    uint32_t copy_count;
 
-    if (model == NULL)
+    if ((models == NULL) || (count == 0U))
     {
         return 0U;
     }
@@ -102,13 +105,17 @@ uint8_t FlashStorage_LoadModel(DiodeModel_t *model)
     checksum = FlashStorage_Checksum((const uint8_t *)record, sizeof(*record) - sizeof(record->checksum));
     if ((record->magic != FLASH_MAGIC_MODEL) ||
         (record->version != FLASH_VERSION) ||
-        (record->checksum != checksum) ||
-        (record->data.valid == 0U))
+        (record->checksum != checksum))
     {
-        memset(model, 0, sizeof(*model));
+        memset(models, 0, count * sizeof(DiodeModel_t));
         return 0U;
     }
 
-    *model = record->data;
+    copy_count = (count > MODEL_SLOT_COUNT) ? MODEL_SLOT_COUNT : count;
+    memcpy(models, record->models, copy_count * sizeof(DiodeModel_t));
+    if (count > copy_count)
+    {
+        memset(&models[copy_count], 0, (count - copy_count) * sizeof(DiodeModel_t));
+    }
     return 1U;
 }

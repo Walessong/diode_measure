@@ -6,6 +6,9 @@
 #include "app_config.h"
 #include "bsp_adc.h"
 
+#define MEASURE_EXTRA_SETTLE_MS 12U
+#define MEASURE_SAMPLE_GAP_MS   2U
+
 static void Measure_ZeroPoint(SamplePoint_t *pt)
 {
     memset(pt, 0, sizeof(*pt));
@@ -41,9 +44,17 @@ static uint8_t Measure_IsPointWeak(const SamplePoint_t *pt)
     return 0U;
 }
 
-static float Measure_GetFixedDrop(CurrentRange_t range)
+static float Measure_GetFixedDrop(RelayDir_t dir, CurrentRange_t range)
 {
-    return (range == RANGE_LOW) ? FIXED_DROP_LOW_V : FIXED_DROP_HIGH_V;
+    float drop = (range == RANGE_LOW) ? FIXED_DROP_LOW_V : FIXED_DROP_HIGH_V;
+
+    if (dir == DIR_1)
+    {
+        drop += (range == RANGE_LOW) ? FIXED_DROP_DIR1_LOW_EXTRA_V
+                                     : FIXED_DROP_DIR1_HIGH_EXTRA_V;
+    }
+
+    return drop;
 }
 
 static uint8_t Measure_IsPointValid(const SamplePoint_t *pt)
@@ -67,7 +78,7 @@ static void Measure_FillPoint(SamplePoint_t *pt, RelayDir_t dir, CurrentRange_t 
     pt->vout = BSP_ADC_ReadVout();
     pt->vsense = BSP_ADC_ReadISense();
     pt->vdut = fabsf(pt->vin - pt->vout);
-    pt->vdut_corr = pt->vdut - Measure_GetFixedDrop(range);
+    pt->vdut_corr = pt->vdut - Measure_GetFixedDrop(dir, range);
     if (pt->vdut_corr < 0.0f)
     {
         pt->vdut_corr = 0.0f;
@@ -88,6 +99,10 @@ static void Measure_AveragePoint(RelayDir_t dir, CurrentRange_t range, SamplePoi
         pt->vsense += temp.vsense;
         pt->vdut += temp.vdut;
         pt->vdut_corr += temp.vdut_corr;
+        if (i + 1U < MEASURE_REPEAT_TIMES)
+        {
+            HAL_Delay(MEASURE_SAMPLE_GAP_MS);
+        }
     }
 
     pt->vin /= (float)MEASURE_REPEAT_TIMES;
@@ -97,6 +112,58 @@ static void Measure_AveragePoint(RelayDir_t dir, CurrentRange_t range, SamplePoi
     pt->vdut_corr /= (float)MEASURE_REPEAT_TIMES;
     pt->dir = (uint8_t)dir;
     pt->range = (uint8_t)range;
+}
+
+static float Measure_ReadAverageISense(void)
+{
+    uint8_t i;
+    float sum = 0.0f;
+
+    for (i = 0U; i < MEASURE_REPEAT_TIMES; i++)
+    {
+        sum += BSP_ADC_ReadISense();
+        if (i + 1U < MEASURE_REPEAT_TIMES)
+        {
+            HAL_Delay(MEASURE_SAMPLE_GAP_MS);
+        }
+    }
+
+    return sum / (float)MEASURE_REPEAT_TIMES;
+}
+
+static float Measure_ReadAverageVdut(void)
+{
+    uint8_t i;
+    float sum = 0.0f;
+
+    for (i = 0U; i < MEASURE_REPEAT_TIMES; i++)
+    {
+        float vin = BSP_ADC_ReadVin();
+        float vout = BSP_ADC_ReadVout();
+        sum += fabsf(vin - vout);
+        if (i + 1U < MEASURE_REPEAT_TIMES)
+        {
+            HAL_Delay(MEASURE_SAMPLE_GAP_MS);
+        }
+    }
+
+    return sum / (float)MEASURE_REPEAT_TIMES;
+}
+
+static uint8_t Measure_SelectForwardDirWeak(const SingleMeasureResult_t *scan, RelayDir_t *dir_out)
+{
+    float score0 = scan->dir0_low.vsense + (0.10f * scan->dir0_low.vdut_corr);
+    float score1 = scan->dir1_low.vsense + (0.10f * scan->dir1_low.vdut_corr);
+    uint8_t weak0 = Measure_IsPointWeak(&scan->dir0_low);
+    uint8_t weak1 = Measure_IsPointWeak(&scan->dir1_low);
+
+    if ((weak0 == 0U) && (weak1 == 0U))
+    {
+        return 0U;
+    }
+
+    *dir_out = (score0 >= score1) ? DIR_0 : DIR_1;
+    return 1U;
 }
 
 static uint8_t Measure_EvaluatePolarity(const SamplePoint_t *pt0, const SamplePoint_t *pt1)
@@ -200,7 +267,7 @@ void Measure_GetPoint(RelayDir_t dir, CurrentRange_t range, SamplePoint_t *pt)
     }
 
     Relay_EnableCurrent(1U);
-    HAL_Delay(ANALOG_SETTLE_MS);
+    HAL_Delay(ANALOG_SETTLE_MS + MEASURE_EXTRA_SETTLE_MS);
     Measure_AveragePoint(dir, range, pt);
     Relay_EnableCurrent(0U);
 }
@@ -322,6 +389,63 @@ uint8_t Measure_GetForwardTotal(SamplePoint_t *low_pt, SamplePoint_t *high_pt, R
     {
         *display_state = result.display_state;
     }
+    return 1U;
+}
+
+uint8_t Measure_GetFaultSample(FaultMeasureResult_t *result)
+{
+    SingleMeasureResult_t scan;
+    RelayDir_t dir;
+
+    if (result == NULL)
+    {
+        return 0U;
+    }
+
+    memset(result, 0, sizeof(*result));
+    Measure_ScanSingleDetailed(&scan);
+    result->display_state = scan.display_state;
+    if (scan.valid != 0U)
+    {
+        dir = scan.forward_dir;
+    }
+    else if (Measure_SelectForwardDirWeak(&scan, &dir) != 0U)
+    {
+        result->display_state = DISPLAY_STATE_FORWARD_ON;
+    }
+    else
+    {
+        return 0U;
+    }
+
+    result->valid = 1U;
+    result->forward_dir = dir;
+    result->low_pt = (dir == DIR_0) ? scan.dir0_low : scan.dir1_low;
+    result->high_pt = (dir == DIR_0) ? scan.dir0_high : scan.dir1_high;
+
+    if (Relay_GetDirection() != dir)
+    {
+        Relay_SetDirection(dir);
+        HAL_Delay(RELAY_SETTLE_MS);
+    }
+    if (Relay_GetRange() != RANGE_LOW)
+    {
+        Relay_SetRange(RANGE_LOW);
+        HAL_Delay(RELAY_SETTLE_MS);
+    }
+
+    Relay_EnableCurrent(1U);
+    HAL_Delay(FAULT_STEP_EARLY_MS);
+    result->step_early_vsense = Measure_ReadAverageISense();
+    result->step_early_vdut = Measure_ReadAverageVdut();
+    HAL_Delay(FAULT_STEP_MID_MS - FAULT_STEP_EARLY_MS);
+    result->step_mid_vsense = Measure_ReadAverageISense();
+    result->step_mid_vdut = Measure_ReadAverageVdut();
+    HAL_Delay(FAULT_STEP_LATE_MS - FAULT_STEP_MID_MS);
+    result->step_late_vsense = Measure_ReadAverageISense();
+    result->step_late_vdut = Measure_ReadAverageVdut();
+    Relay_EnableCurrent(0U);
+
     return 1U;
 }
 

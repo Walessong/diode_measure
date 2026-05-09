@@ -3,7 +3,7 @@
 
 #include "learn.h"
 
-uint8_t FlashStorage_SaveModel(const DiodeModel_t *model);
-uint8_t FlashStorage_LoadModel(DiodeModel_t *model);
+uint8_t FlashStorage_SaveModels(const DiodeModel_t *models, uint32_t count);
+uint8_t FlashStorage_LoadModels(DiodeModel_t *models, uint32_t count);
 
 #endif

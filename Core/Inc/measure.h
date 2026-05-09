@@ -44,12 +44,28 @@ typedef struct
     float vf_high_corrected;
 } SingleMeasureResult_t;
 
+typedef struct
+{
+    uint8_t valid;
+    RelayDir_t forward_dir;
+    DisplayState_t display_state;
+    SamplePoint_t low_pt;
+    SamplePoint_t high_pt;
+    float step_early_vsense;
+    float step_mid_vsense;
+    float step_late_vsense;
+    float step_early_vdut;
+    float step_mid_vdut;
+    float step_late_vdut;
+} FaultMeasureResult_t;
+
 void Measure_Init(void);
 void Measure_GetPoint(RelayDir_t dir, CurrentRange_t range, SamplePoint_t *pt);
 void Measure_ScanSingle(SingleMeasureResult_t *result);
 void Measure_ScanSingleDetailed(SingleMeasureResult_t *result);
 uint8_t Measure_GetForwardLowOnly(SamplePoint_t *low_pt, RelayDir_t *forward_dir, DisplayState_t *display_state);
 uint8_t Measure_GetForwardTotal(SamplePoint_t *low_pt, SamplePoint_t *high_pt, RelayDir_t *forward_dir, DisplayState_t *display_state);
+uint8_t Measure_GetFaultSample(FaultMeasureResult_t *result);
 uint8_t Measure_DetectPolarity(void);
 float Measure_SingleVf(void);
 
